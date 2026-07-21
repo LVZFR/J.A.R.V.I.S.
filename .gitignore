@@ -1,0 +1,7 @@
+.env
+.venv/
+.jarvis-auth/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
