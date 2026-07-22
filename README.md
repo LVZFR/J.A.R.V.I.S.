@@ -1,5 +1,7 @@
 # J.A.R.V.I.S.
 
+![Uploading image.png…]()
+
 <p align="center">
   <strong>A private, local-first voice and text command interface for Hermes Agent.</strong>
 </p>
