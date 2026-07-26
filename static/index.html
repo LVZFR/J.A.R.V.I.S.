@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>JARVIS // Hermes Command Interface</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="grid-bg"></div><div class="scanline"></div>
+  <header>
+    <div class="brand"><span class="hex">⬡</span><div><h1>J.A.R.V.I.S.</h1><small>HERMES AGENT COMMAND INTERFACE</small></div></div>
+    <div class="header-status"><button type="button" id="authBadge" class="badge auth-badge">IDENTITY · LOCKED</button><span id="clock">00:00:00</span><span class="badge" id="gatewayBadge">GATEWAY · SCANNING</span></div>
+  </header>
+
+  <main>
+    <aside class="left-rail">
+      <section class="panel system-panel">
+        <div class="panel-title">SYSTEM MATRIX <span>01</span></div>
+        <dl>
+          <div><dt>PROFILE</dt><dd id="profile">DEFAULT</dd></div>
+          <div><dt>GATEWAY</dt><dd id="gateway">PROBING</dd></div>
+          <div><dt>STT LINK</dt><dd id="stt">PROBING</dd></div>
+          <div><dt>TTS LINK</dt><dd id="tts">PROBING</dd></div>
+          <div><dt>WAKE WORD</dt><dd id="wakeword">PROBING</dd></div>
+          <div><dt>TOUCH ID</dt><dd id="passkeyState">LOCKED</dd></div>
+          <div><dt>FACE ID</dt><dd id="faceState">LOCKED</dd></div>
+          <div><dt>VOICE ID</dt><dd id="voiceAuthState">LOCKED</dd></div>
+          <div><dt>LATENCY</dt><dd id="latency">— MS</dd></div>
+        </dl>
+      </section>
+      <section class="panel command-panel">
+        <div class="panel-title">COMMAND DECK <span>02</span></div>
+        <div class="hotkeys" id="hotkeys">
+          <button data-command="/new"><kbd>⌘N</kbd>/new</button>
+          <button data-command="/goal"><kbd>G</kbd>/goal</button>
+          <button data-command="/profile"><kbd>P</kbd>/profile</button>
+          <button data-command="/background"><kbd>B</kbd>/background</button>
+          <button data-command="/personality"><kbd>Y</kbd>/personality</button>
+          <button data-command="/kanban"><kbd>K</kbd>/kanban</button>
+        </div>
+        <div class="armed">ARMED COMMAND <strong id="armedCommand">NONE</strong></div>
+      </section>
+    </aside>
+
+    <section class="core">
+      <div class="reactor-wrap" aria-hidden="true">
+        <div class="radar"><i></i><i></i><i></i><span class="sweep"></span><b class="core-dot"></b></div>
+        <div class="reactor-caption"><span id="coreState">STANDBY</span><small>ARC REACTOR // VOICE NODE</small></div>
+      </div>
+      <section class="panel response-panel">
+        <div class="panel-title">HERMES RESPONSE STREAM <span id="runLabel">NO ACTIVE RUN</span></div>
+        <div id="response" class="response" aria-live="polite"><span class="ghost">Awaiting directive...</span></div>
+      </section>
+      <form id="promptForm" class="prompt-bar">
+        <button type="button" id="micButton" class="mic" title="Push to talk"><span>◉</span><b>PUSH</b></button>
+        <div class="input-shell"><label for="prompt">DIRECTIVE INPUT</label><textarea id="prompt" rows="2" placeholder="Type an instruction or select a command, then speak..."></textarea></div>
+        <button type="submit" id="sendButton" class="send">TRANSMIT <span>↗</span></button>
+      </form>
+      <div class="voice-controls">
+        <button type="button" id="wakeButton" class="wake" aria-pressed="false">◇ WAKE MODE · OFF</button>
+        <span class="wake-hint">Say “Hey Jarvis”, wait for the tone, then speak.</span>
+        <button type="button" id="killVoice" class="kill">■ KILL VOICE</button>
+      </div>
+    </section>
+
+    <aside class="right-rail">
+      <section class="panel log-panel">
+        <div class="panel-title">ACTION TELEMETRY <span>LIVE</span></div>
+        <div id="actionLog" class="action-log"></div>
+      </section>
+      <section class="panel waveform-panel">
+        <div class="panel-title">AUDIO SPECTRUM <span id="voiceState">IDLE</span></div>
+        <canvas id="waveform" width="360" height="90"></canvas>
+      </section>
+    </aside>
+  </main>
+
+  <div id="approvalModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="approvalTitle">
+    <div class="modal-card"><div class="warning-ring">!</div><h2 id="approvalTitle">AUTHORIZATION REQUIRED</h2>
+      <p id="approvalDescription">Hermes is requesting approval.</p><pre id="approvalCommand"></pre>
+      <div id="approvalChoices" class="approval-choices"></div>
+    </div>
+  </div>
+  <div id="authModal" class="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="modal-card auth-card">
+      <div class="identity-ring">◈</div><h2 id="authTitle">JARVIS IDENTITY MATRIX</h2>
+      <p id="authMessage">Touch ID is required before JARVIS can initialize.</p>
+      <div class="identity-steps">
+        <span id="stepPasskey">1 · TOUCH ID</span><span id="stepFace">2 · FACE MAP</span><span id="stepVoice">3 · VOICEPRINT</span>
+      </div>
+      <video id="faceVideo" class="identity-video hidden" autoplay muted playsinline></video><canvas id="faceCanvas" class="hidden"></canvas>
+      <div id="authProgress" class="auth-progress">SECURE SESSION LOCKED</div>
+      <div class="auth-actions">
+        <button type="button" id="authPrimary">INITIALIZE TOUCH ID</button>
+        <button type="button" id="enrollFace" class="hidden">CAPTURE FACE MAP</button>
+        <button type="button" id="enrollVoice" class="hidden">RECORD VOICEPRINT</button>
+        <button type="button" id="closeAuth" class="hidden">ENTER JARVIS</button>
+        <button type="button" id="lockAuth">LOCK SESSION</button>
+      </div>
+      <small>Biometric templates stay on this Mac. Face and voice matching supplement Touch ID and are not resistant to every sophisticated spoof.</small>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/voice-queue.js?v=20260726-2"></script><script src="/static/wake-word.js?v=20260726-2"></script><script src="/static/auth-client.js?v=20260726-2"></script><script src="/static/app.js?v=20260726-2"></script>
+</body>
+</html>

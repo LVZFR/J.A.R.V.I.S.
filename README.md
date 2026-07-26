@@ -1,7 +1,5 @@
 # J.A.R.V.I.S.
 
-
-
 <p align="center">
   <strong>A private, local-first voice and text command interface for Hermes Agent.</strong>
 </p>
@@ -56,7 +54,7 @@ The wake phrase is an activation mechanism, **not authentication**. The active p
 2. Wake listening is available only while that session is unlocked.
 3. Every spoken directive must match the enrolled voiceprint.
 4. Failed voice audio is discarded before STT and never reaches Hermes.
-5. `/api/run` independently requires a valid session and recent voice match.
+5. Typed `/api/run` requests require the unlocked Touch ID/passkey session; spoken runs independently require both that session and a recent voice match.
 
 Face authentication remains available only as experimental code behind `JARVIS_FACE_AUTH_ENABLED=true`. It is disabled because ordinary lighting changes caused unreliable matches. While disabled, face endpoints return HTTP 410 and the browser does not start a camera stream.
 
@@ -157,7 +155,7 @@ Click **PUSH**, speak, and pause. Recording stops automatically after detected s
 
 ### Typed commands
 
-Type a directive and press Enter or click **TRANSMIT**. Typed runs still require a recent voice match; use **PUSH** first when the previous match has expired.
+Type a directive and press Enter or click **TRANSMIT**. Typed runs require the current Touch ID/passkey session but do not require a fresh voice sample. Spoken commands continue to require voiceprint verification.
 
 ### Hermes commands
 
