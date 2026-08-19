@@ -54,6 +54,8 @@ AUTH_COOKIE = "jarvis_auth"
 VOICEPRINT_THRESHOLD = float(os.getenv("JARVIS_VOICEPRINT_THRESHOLD", "0.82"))
 FACE_THRESHOLD = float(os.getenv("JARVIS_FACE_THRESHOLD", "65"))
 FACE_AUTH_ENABLED = os.getenv("JARVIS_FACE_AUTH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 _wakeword_engine: Any = None
 _wakeword_lock = asyncio.Lock()
@@ -409,6 +411,27 @@ async def approval(payload: ApprovalRequest) -> Any:
         f"/v1/runs/{payload.run_id}/approval",
         json={"choice": payload.choice, "resolve_all": payload.resolve_all},
     )
+
+
+class TelegramNotifyRequest(BaseModel):
+    text: str = Field(min_length=1)
+    agent: str | None = None
+
+
+@app.post("/api/telegram/notify")
+async def telegram_notify(payload: TelegramNotifyRequest, request: Request) -> Any:
+    require_passkey(request)
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        raise HTTPException(status_code=503, detail="Telegram bot not configured")
+    prefix = f"[{payload.agent.upper()}] " if payload.agent else ""
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": f"{prefix}{payload.text}"},
+        )
+        if response.is_error:
+            raise HTTPException(status_code=502, detail=f"Telegram error: {response.text[:300]}")
+        return response.json()
 
 
 async def elevenlabs_stt(data: bytes, filename: str, content_type: str) -> str:

@@ -29,17 +29,47 @@
           <div><dt>LATENCY</dt><dd id="latency">— MS</dd></div>
         </dl>
       </section>
-      <section class="panel command-panel">
-        <div class="panel-title">COMMAND DECK <span>02</span></div>
-        <div class="hotkeys" id="hotkeys">
-          <button data-command="/new"><kbd>⌘N</kbd>/new</button>
-          <button data-command="/goal"><kbd>G</kbd>/goal</button>
-          <button data-command="/profile"><kbd>P</kbd>/profile</button>
-          <button data-command="/background"><kbd>B</kbd>/background</button>
-          <button data-command="/personality"><kbd>Y</kbd>/personality</button>
-          <button data-command="/kanban"><kbd>K</kbd>/kanban</button>
+      <section class="panel crew-panel">
+        <div class="panel-title">MISSION CREW <span>02</span></div>
+        <div class="crew-roster" id="crewRoster">
+          <div class="crew-member active" data-agent="jarvis">
+            <div class="crew-icon">⚡</div>
+            <div class="crew-info">
+              <div class="crew-name">JARVIS</div>
+              <div class="crew-role">Coordinator</div>
+            </div>
+          </div>
+          <div class="crew-member" data-agent="dev">
+            <div class="crew-icon">⚙</div>
+            <div class="crew-info">
+              <div class="crew-name">DEV</div>
+              <div class="crew-role">Engineering</div>
+            </div>
+          </div>
+          <div class="crew-member" data-agent="research">
+            <div class="crew-icon">🔍</div>
+            <div class="crew-info">
+              <div class="crew-name">RESEARCH</div>
+              <div class="crew-role">Intelligence</div>
+            </div>
+          </div>
+          <div class="crew-member" data-agent="cyber">
+            <div class="crew-icon">🛡</div>
+            <div class="crew-info">
+              <div class="crew-name">CYBER</div>
+              <div class="crew-role">Security</div>
+            </div>
+          </div>
+          <div class="crew-member" data-agent="assistant">
+            <div class="crew-icon">📋</div>
+            <div class="crew-info">
+              <div class="crew-name">ASSISTANT</div>
+              <div class="crew-role">Communications</div>
+            </div>
+          </div>
         </div>
-        <div class="armed">ARMED COMMAND <strong id="armedCommand">NONE</strong></div>
+        <div class="armed">ACTIVE AGENT <strong id="activeAgent">JARVIS</strong></div>
+        <strong id="armedCommand" class="hidden">NONE</strong>
       </section>
     </aside>
 
@@ -60,6 +90,7 @@
       <div class="voice-controls">
         <button type="button" id="wakeButton" class="wake" aria-pressed="false">◇ WAKE MODE · OFF</button>
         <span class="wake-hint">Say “Hey Jarvis”, wait for the tone, then speak.</span>
+        <button type="button" id="telegramToggle" class="wake" aria-pressed="false">✈ NOTIFY TELEGRAM · OFF</button>
         <button type="button" id="killVoice" class="kill">■ KILL VOICE</button>
       </div>
     </section>
@@ -103,6 +134,6 @@
   </div>
   <div id="toast" class="toast"></div>
 
-  <script src="/static/voice-queue.js?v=20260726-2"></script><script src="/static/wake-word.js?v=20260726-2"></script><script src="/static/auth-client.js?v=20260726-2"></script><script src="/static/app.js?v=20260726-2"></script>
+  <script src="/static/voice-queue.js?v=20260819-4"></script><script src="/static/wake-word.js?v=20260819-4"></script><script src="/static/auth-client.js?v=20260819-4"></script><script src="/static/app.js?v=20260819-4"></script>
 </body>
 </html>

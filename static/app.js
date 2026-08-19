@@ -328,7 +328,7 @@ function handleEvent(event) {
   if (type === 'tool.completed') { log(`Tool completed: ${event.tool} · ${event.duration || 0}s${event.error ? ' · ERROR' : ''}`, event.error ? 'error' : ''); return; }
   if (type === 'approval.request') { log('Approval required', 'amber'); showApproval(event); return; }
   if (type === 'approval.responded') { log(`Approval response: ${event.choice}`, 'amber'); return; }
-  if (type === 'run.completed') { if (!$('response').textContent && event.output) $('response').textContent = event.output; state.runComplete = true; feedVoice('', true); setCore('STANDBY'); log(`Run complete · ${Math.round(performance.now()-state.startedAt)} ms total`, 'amber'); if (!voiceQueue.pumping || voiceQueue.suppressedRunId === state.runId) resumeWakeMode(); return; }
+  if (type === 'run.completed') { if (!$('response').textContent && event.output) $('response').textContent = event.output; state.runComplete = true; feedVoice('', true); setCore('STANDBY'); log(`Run complete · ${Math.round(performance.now()-state.startedAt)} ms total`, 'amber'); if (state.telegramNotify) sendTelegramNotify($('response').textContent, state.lastAgent); if (!voiceQueue.pumping || voiceQueue.suppressedRunId === state.runId) resumeWakeMode(); return; }
   if (type === 'run.failed' || type === 'bridge.error') { state.runComplete = true; setCore('FAULT'); resumeWakeMode(); log(`${type}: ${event.error}`, 'error'); return; }
   if (type === 'run.cancelled') { state.runComplete = true; setCore('STANDBY'); resumeWakeMode(); log('Run cancelled', 'error'); return; }
   log(`Event: ${type}`);
@@ -344,6 +344,15 @@ function showApproval(event) {
 async function sendApproval(choice) {
   try { const r=await fetch('/api/approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:state.runId,choice})}); if(!r.ok)throw new Error(await r.text()); $('approvalModal').classList.add('hidden'); log(`Approval ${choice}`,choice==='deny'?'error':'amber'); }
   catch(e){toast('Approval failed');log(`Approval error: ${e.message}`,'error');}
+}
+
+async function sendTelegramNotify(text, agent) {
+  if (!text) return;
+  try {
+    const r = await fetch('/api/telegram/notify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: text.slice(0, 3800), agent: agent || null }) });
+    if (!r.ok) throw new Error(await r.text());
+    log('Telegram notified', 'amber');
+  } catch (e) { log(`Telegram notify failed: ${e.message}`, 'error'); }
 }
 
 async function recordVoice(wakeTriggered = false) {
@@ -377,4 +386,20 @@ $('micButton').onclick=()=>recordVoice(false); $('wakeButton').onclick=()=>wake.
 $('authPrimary').onclick=performPasskey; $('enrollFace').onclick=enrollFaceIdentity; $('enrollVoice').onclick=enrollVoiceIdentity; $('authBadge').onclick=()=>$('authModal').classList.remove('hidden'); $('closeAuth').onclick=()=>{$('authModal').classList.add('hidden');if(authGate.status.policy?.face_required)startContinuousFace().catch(e=>log(`Camera error: ${e.message}`,'error'))}; $('lockAuth').onclick=lockIdentity;
 window.addEventListener('beforeunload',()=>{stopWakeMode();clearInterval(identity.faceTimer);identity.camera?.getTracks().forEach(track=>track.stop())});
 document.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>armCommand(b.dataset.command));
+document.querySelectorAll('[data-agent]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('[data-agent]').forEach(m=>m.classList.remove('active'));
+  b.classList.add('active');
+  const agent = b.dataset.agent;
+  state.lastAgent = agent;
+  const activeAgentEl = document.getElementById('activeAgent');
+  if (activeAgentEl) activeAgentEl.textContent = agent.toUpperCase();
+  armCommand(`[ROUTE:${agent.toUpperCase()}]`);
+});
+$('telegramToggle').onclick=()=>{
+  state.telegramNotify = !state.telegramNotify;
+  $('telegramToggle').classList.toggle('active', state.telegramNotify);
+  $('telegramToggle').setAttribute('aria-pressed', String(state.telegramNotify));
+  $('telegramToggle').textContent = state.telegramNotify ? '✈ NOTIFY TELEGRAM · ON' : '✈ NOTIFY TELEGRAM · OFF';
+  log(state.telegramNotify ? 'Telegram push notifications enabled' : 'Telegram push notifications disabled', 'amber');
+};
 setInterval(()=>$('clock').textContent=new Date().toLocaleTimeString('en-GB'),1000); refreshAuthStatus().then(status=>{if(status?.policy?.face_required&&status?.session.passkey&&status?.enrollment.face)startContinuousFace().catch(e=>log(`Camera error: ${e.message}`,'error'))});refreshStatus();setInterval(refreshStatus,30000);setInterval(refreshAuthStatus,10000);idleWave();log('JARVIS interface initialized');
