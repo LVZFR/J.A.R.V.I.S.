@@ -13,13 +13,14 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
+import hmac
+import secrets
+
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-
-from auth import AuthPolicy, AuthStore, FaceIdentity, PasskeyManager, VoiceprintManager
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -47,21 +48,12 @@ ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 ELEVENLABS_STT_MODEL_ID = os.getenv("ELEVENLABS_STT_MODEL_ID", "scribe_v1")
 WHISPER_MODEL = os.getenv("JARVIS_WHISPER_MODEL", "base")
 WAKEWORD_THRESHOLD = float(os.getenv("JARVIS_WAKEWORD_THRESHOLD", "0.55"))
-AUTH_DIR = Path(os.getenv("JARVIS_AUTH_DIR", str(ROOT / ".jarvis-auth"))).expanduser()
-AUTH_RP_ID = os.getenv("JARVIS_AUTH_RP_ID", "localhost")
-AUTH_ORIGIN = os.getenv("JARVIS_AUTH_ORIGIN", "http://localhost:8787")
-AUTH_COOKIE = "jarvis_auth"
-VOICEPRINT_THRESHOLD = float(os.getenv("JARVIS_VOICEPRINT_THRESHOLD", "0.82"))
-FACE_THRESHOLD = float(os.getenv("JARVIS_FACE_THRESHOLD", "65"))
-FACE_AUTH_ENABLED = os.getenv("JARVIS_FACE_AUTH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_COOKIE = "jarvis_session"
+SHARED_SECRET = os.getenv("JARVIS_SHARED_SECRET", "")
 
 _wakeword_engine: Any = None
 _wakeword_lock = asyncio.Lock()
-auth_store = AuthStore(AUTH_DIR, use_keychain=True)
-auth_policy = AuthPolicy(require_face=FACE_AUTH_ENABLED)
-passkeys = PasskeyManager(auth_store, rp_id=AUTH_RP_ID, origin=AUTH_ORIGIN)
-face_identity = FaceIdentity(auth_store, threshold=FACE_THRESHOLD) if FACE_AUTH_ENABLED else None
-voiceprints = VoiceprintManager(auth_store, threshold=VOICEPRINT_THRESHOLD)
+_sessions: set[str] = set()
 
 app = FastAPI(title="JARVIS Hermes Bridge", version="1.0.0")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -83,11 +75,6 @@ class ApprovalRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2500)
-
-
-class PasskeyVerifyRequest(BaseModel):
-    transaction: str
-    credential: dict[str, Any]
 
 
 def auth_headers() -> dict[str, str]:
@@ -149,191 +136,63 @@ async def hermes_json(method: str, path: str, **kwargs: Any) -> Any:
     return response.json()
 
 
-def validate_same_origin(request: Request) -> None:
-    origin = request.headers.get("origin")
-    if origin and origin != AUTH_ORIGIN:
-        raise HTTPException(403, "Cross-origin authentication request rejected")
+def request_session(request: Request) -> str | None:
+    token = request.cookies.get(AUTH_COOKIE)
+    return token if token and token in _sessions else None
 
 
-def request_session(request: Request) -> Any:
-    return auth_policy.get_session(request.cookies.get(AUTH_COOKIE))
-
-
-def require_passkey(request: Request) -> Any:
+def require_authorized(request: Request) -> str:
     session = request_session(request)
-    status = auth_policy.authorization(session)
-    if status["reason"] == "passkey_required":
-        raise HTTPException(401, status)
+    if not session:
+        raise HTTPException(401, {"authorized": False, "reason": "login_required"})
     return session
 
 
-def require_passkey_face(request: Request) -> Any:
-    session = require_passkey(request)
-    status = auth_policy.authorization(session)
-    if status["reason"] == "face_required":
-        raise HTTPException(401, status)
-    return session
-
-
-def require_authorized(request: Request) -> Any:
-    session = request_session(request)
-    status = auth_policy.authorization(session)
-    if not status["authorized"]:
-        raise HTTPException(401, status)
-    return session
-
-
-def attach_auth_cookie(response: Response, session: Any) -> None:
+def attach_auth_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         AUTH_COOKIE,
-        session.token,
-        max_age=8 * 60 * 60,
+        token,
+        max_age=30 * 24 * 60 * 60,
         httponly=True,
         secure=False,
-        samesite="strict",
+        samesite="lax",
         path="/",
     )
 
 
 @app.get("/")
-async def index(request: Request) -> Response:
-    if request.url.hostname == "127.0.0.1":
-        port = request.url.port or 8787
-        return RedirectResponse(f"http://localhost:{port}/", status_code=307)
+async def index() -> Response:
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/auth/status")
 async def auth_status(request: Request) -> dict[str, Any]:
-    session = request_session(request)
-    authorization = auth_policy.authorization(session)
-    passkey_current = bool(session and session.passkey_at is not None and authorization["reason"] != "passkey_required")
-    face_current = bool(FACE_AUTH_ENABLED and passkey_current and authorization["reason"] in {"voice_required", "authorized"})
-    return {
-        "policy": {"face_required": FACE_AUTH_ENABLED, "voice_required": True, "passkey_required": True},
-        "enrollment": {
-            "passkey": passkeys.enrolled,
-            "face": bool(face_identity and face_identity.enrolled),
-            "face_disabled": not FACE_AUTH_ENABLED,
-            "voice": voiceprints.enrolled,
-            "complete": passkeys.enrolled and voiceprints.enrolled and (not FACE_AUTH_ENABLED or bool(face_identity and face_identity.enrolled)),
-        },
-        "session": {
-            "passkey": passkey_current,
-            "face": face_current,
-            "voice": bool(session and authorization["authorized"]),
-            **authorization,
-        },
-    }
+    authorized = request_session(request) is not None
+    return {"configured": bool(SHARED_SECRET), "session": {"authorized": authorized}}
 
 
-@app.post("/api/auth/passkey/register/options")
-async def passkey_register_options(request: Request) -> dict[str, Any]:
-    validate_same_origin(request)
-    if passkeys.enrolled:
-        require_passkey(request)
-    transaction, options = passkeys.registration_options()
-    return {"transaction": transaction, "options": options}
+class LoginRequest(BaseModel):
+    secret: str = Field(min_length=1)
 
 
-@app.post("/api/auth/passkey/register/verify")
-async def passkey_register_verify(payload: PasskeyVerifyRequest, request: Request) -> JSONResponse:
-    validate_same_origin(request)
-    try:
-        passkeys.verify_registration_response(payload.transaction, payload.credential)
-    except Exception as exc:
-        raise HTTPException(401, f"Passkey registration failed: {exc}") from exc
-    session = auth_policy.create_session()
-    auth_policy.mark_passkey(session)
-    response = JSONResponse({"verified": True, "next": "face_enrollment" if FACE_AUTH_ENABLED else "voice_enrollment"})
-    attach_auth_cookie(response, session)
+@app.post("/api/auth/login")
+async def auth_login(payload: LoginRequest) -> JSONResponse:
+    if not SHARED_SECRET:
+        raise HTTPException(503, "JARVIS_SHARED_SECRET is not configured in .env")
+    if not hmac.compare_digest(payload.secret, SHARED_SECRET):
+        raise HTTPException(401, "Incorrect access key")
+    token = secrets.token_urlsafe(32)
+    _sessions.add(token)
+    response = JSONResponse({"authorized": True})
+    attach_auth_cookie(response, token)
     return response
-
-
-@app.post("/api/auth/passkey/login/options")
-async def passkey_login_options(request: Request) -> dict[str, Any]:
-    validate_same_origin(request)
-    try:
-        transaction, options = passkeys.authentication_options()
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return {"transaction": transaction, "options": options}
-
-
-@app.post("/api/auth/passkey/login/verify")
-async def passkey_login_verify(payload: PasskeyVerifyRequest, request: Request) -> JSONResponse:
-    validate_same_origin(request)
-    try:
-        passkeys.verify_authentication_response(payload.transaction, payload.credential)
-    except Exception as exc:
-        raise HTTPException(401, f"Passkey authentication failed: {exc}") from exc
-    session = auth_policy.create_session()
-    auth_policy.mark_passkey(session)
-    response = JSONResponse({"verified": True})
-    attach_auth_cookie(response, session)
-    return response
-
-
-@app.post("/api/auth/face/enroll")
-async def face_enroll(request: Request, images: list[UploadFile] = File(...)) -> Any:
-    validate_same_origin(request)
-    if not FACE_AUTH_ENABLED:
-        raise HTTPException(410, "Face authentication is disabled")
-    require_passkey(request)
-    try:
-        return await asyncio.to_thread(face_identity.enroll, [await image.read() for image in images])
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@app.post("/api/auth/face/verify")
-async def face_verify(request: Request, image: UploadFile = File(...)) -> Any:
-    validate_same_origin(request)
-    if not FACE_AUTH_ENABLED:
-        raise HTTPException(410, "Face authentication is disabled")
-    session = require_passkey(request)
-    try:
-        result = await asyncio.to_thread(face_identity.verify, await image.read())
-    except ValueError as exc:
-        auth_policy.mark_face(session, False)
-        raise HTTPException(400, str(exc)) from exc
-    auth_policy.mark_face(session, bool(result["matched"]))
-    if not result["matched"]:
-        raise HTTPException(401, {"reason": "face_mismatch", **result})
-    return result
-
-
-@app.post("/api/auth/voice/enroll")
-async def voice_enroll(request: Request, samples: list[UploadFile] = File(...)) -> Any:
-    validate_same_origin(request)
-    (require_passkey_face if FACE_AUTH_ENABLED else require_passkey)(request)
-    try:
-        return await asyncio.to_thread(voiceprints.enroll, [await sample.read() for sample in samples])
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@app.post("/api/auth/voice/verify")
-async def voice_verify(request: Request, audio: UploadFile = File(...)) -> Any:
-    validate_same_origin(request)
-    session = (require_passkey_face if FACE_AUTH_ENABLED else require_passkey)(request)
-    try:
-        result = await asyncio.to_thread(voiceprints.verify, await audio.read())
-    except ValueError as exc:
-        auth_policy.mark_voice(session, False)
-        raise HTTPException(400, str(exc)) from exc
-    auth_policy.mark_voice(session, bool(result["matched"]))
-    if not result["matched"]:
-        raise HTTPException(401, {"reason": "voice_mismatch", **result})
-    return result
 
 
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request) -> JSONResponse:
-    validate_same_origin(request)
     token = request.cookies.get(AUTH_COOKIE)
     if token:
-        auth_policy.sessions.pop(token, None)
+        _sessions.discard(token)
     response = JSONResponse({"logged_out": True})
     response.delete_cookie(AUTH_COOKIE, path="/")
     return response
@@ -364,10 +223,7 @@ async def status() -> dict[str, Any]:
 
 @app.post("/api/run")
 async def create_run(payload: RunRequest, request: Request) -> Any:
-    if payload.input_mode == "typed":
-        (require_passkey_face if FACE_AUTH_ENABLED else require_passkey)(request)
-    else:
-        require_authorized(request)
+    require_authorized(request)
     body = payload.model_dump(exclude_none=True, exclude={"input_mode"})
     headers = {}
     session_key = request.headers.get("X-Jarvis-Session-Key")
@@ -492,16 +348,9 @@ async def tts(payload: TTSRequest) -> Response:
 @app.websocket("/api/wakeword")
 async def wakeword_socket(websocket: WebSocket) -> None:
     await websocket.accept()
-    origin = websocket.headers.get("origin")
-    session = auth_policy.get_session(websocket.cookies.get(AUTH_COOKIE))
-    authorization = auth_policy.authorization(session)
-    if origin and origin != AUTH_ORIGIN:
-        await websocket.send_json({"event": "wakeword.error", "error": "Cross-origin wake stream rejected"})
-        await websocket.close(code=1008)
-        return
-    if authorization["reason"] not in {"voice_required", "authorized"}:
-        requirement = "Touch ID and current face verification are required" if FACE_AUTH_ENABLED else "Touch ID verification is required"
-        await websocket.send_json({"event": "wakeword.error", "error": requirement})
+    session = websocket.cookies.get(AUTH_COOKIE)
+    if not session or session not in _sessions:
+        await websocket.send_json({"event": "wakeword.error", "error": "Login is required before wake mode can start"})
         await websocket.close(code=1008)
         return
     if importlib.util.find_spec("openwakeword") is None:

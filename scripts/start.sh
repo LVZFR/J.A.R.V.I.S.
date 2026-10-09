@@ -24,4 +24,4 @@ if [[ ! -f "$STAMP" || "$(cat "$STAMP")" != "$HASH" ]]; then
   printf '%s' "$HASH" > "$STAMP"
 fi
 set -a; source .env; set +a
-exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "${JARVIS_PORT:-8787}"
+exec .venv/bin/uvicorn server:app --host "${JARVIS_HOST:-127.0.0.1}" --port "${JARVIS_PORT:-8787}"

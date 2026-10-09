@@ -23,9 +23,7 @@
           <div><dt>STT LINK</dt><dd id="stt">PROBING</dd></div>
           <div><dt>TTS LINK</dt><dd id="tts">PROBING</dd></div>
           <div><dt>WAKE WORD</dt><dd id="wakeword">PROBING</dd></div>
-          <div><dt>TOUCH ID</dt><dd id="passkeyState">LOCKED</dd></div>
-          <div><dt>FACE ID</dt><dd id="faceState">LOCKED</dd></div>
-          <div><dt>VOICE ID</dt><dd id="voiceAuthState">LOCKED</dd></div>
+          <div><dt>ACCESS</dt><dd id="accessState">LOCKED</dd></div>
           <div><dt>LATENCY</dt><dd id="latency">— MS</dd></div>
         </dl>
       </section>
@@ -66,12 +64,18 @@
 
     <aside class="right-rail">
       <section class="panel log-panel">
-        <div class="panel-title">ACTION TELEMETRY <span>LIVE</span></div>
+        <div class="panel-title">ACTION TELEMETRY <span>LIVE</span><button type="button" id="toggleLog" class="panel-toggle">HIDE</button></div>
         <div id="actionLog" class="action-log"></div>
       </section>
       <section class="panel waveform-panel">
         <div class="panel-title">AUDIO SPECTRUM <span id="voiceState">IDLE</span></div>
         <canvas id="waveform" width="360" height="90"></canvas>
+      </section>
+      <section class="panel threatmap-panel">
+        <div class="panel-title">GLOBAL THREAT MAP <span>KASPERSKY</span></div>
+        <div class="threatmap-frame">
+          <iframe width="400" height="400" src="https://cybermap.kaspersky.com/en/widget/dynamic/dark" frameborder="0" loading="lazy"></iframe>
+        </div>
       </section>
     </aside>
   </main>
@@ -84,25 +88,21 @@
   </div>
   <div id="authModal" class="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
     <div class="modal-card auth-card">
-      <div class="identity-ring">◈</div><h2 id="authTitle">JARVIS IDENTITY MATRIX</h2>
-      <p id="authMessage">Touch ID is required before JARVIS can initialize.</p>
-      <div class="identity-steps">
-        <span id="stepPasskey">1 · TOUCH ID</span><span id="stepFace">2 · FACE MAP</span><span id="stepVoice">3 · VOICEPRINT</span>
-      </div>
-      <video id="faceVideo" class="identity-video hidden" autoplay muted playsinline></video><canvas id="faceCanvas" class="hidden"></canvas>
-      <div id="authProgress" class="auth-progress">SECURE SESSION LOCKED</div>
+      <div class="identity-ring">◈</div><h2 id="authTitle">JARVIS ACCESS</h2>
+      <p id="authMessage">Enter the access key to unlock this JARVIS session.</p>
+      <form id="authForm" class="auth-form">
+        <input type="password" id="authSecret" placeholder="Access key" autocomplete="current-password" />
+        <button type="submit" id="authPrimary">UNLOCK</button>
+      </form>
+      <div id="authProgress" class="auth-progress">SESSION LOCKED</div>
       <div class="auth-actions">
-        <button type="button" id="authPrimary">INITIALIZE TOUCH ID</button>
-        <button type="button" id="enrollFace" class="hidden">CAPTURE FACE MAP</button>
-        <button type="button" id="enrollVoice" class="hidden">RECORD VOICEPRINT</button>
-        <button type="button" id="closeAuth" class="hidden">ENTER JARVIS</button>
         <button type="button" id="lockAuth">LOCK SESSION</button>
       </div>
-      <small>Biometric templates stay on this Mac. Face and voice matching supplement Touch ID and are not resistant to every sophisticated spoof.</small>
+      <small>Access is a shared secret, checked server-side. Keep this JARVIS instance reachable only over your Tailscale network.</small>
     </div>
   </div>
   <div id="toast" class="toast"></div>
 
-  <script src="/static/voice-queue.js?v=20260726-2"></script><script src="/static/wake-word.js?v=20260726-2"></script><script src="/static/auth-client.js?v=20260726-2"></script><script src="/static/app.js?v=20260726-2"></script>
+  <script src="/static/voice-queue.js?v=20261008-1"></script><script src="/static/wake-word.js?v=20261008-1"></script><script src="/static/auth-client.js?v=20261008-1"></script><script src="/static/app.js?v=20261008-1"></script>
 </body>
 </html>

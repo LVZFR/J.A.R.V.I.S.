@@ -6,7 +6,6 @@ const logEl = $('actionLog');
 const wake = { enabled: false, ready: false, paused: false, socket: null, stream: null, context: null, source: null, processor: null, reconnectTimer: null, frames: new PcmFrameBuffer(1280) };
 const wakeGate = new WakeWordGate(activateWakeWord);
 const authGate = new AuthGate();
-const identity = { camera: null, faceTimer: null, verifyingFace: false };
 
 function log(message, tone = '') {
   const row = document.createElement('div'); row.className = `log-entry ${tone}`;
@@ -28,27 +27,12 @@ async function apiJson(url, options = {}) {
 
 function renderAuth(status) {
   authGate.update(status);
-  const enrolled = status.enrollment || {}, session = status.session || {}, faceRequired = status.policy?.face_required === true;
-  $('stepPasskey').classList.toggle('complete', enrolled.passkey); $('stepFace').classList.toggle('complete', !faceRequired || enrolled.face); $('stepVoice').classList.toggle('complete', enrolled.voice);
-  $('stepFace').textContent = '2 · FACE MAP'; $('stepFace').classList.toggle('hidden', !faceRequired); $('stepVoice').textContent = faceRequired ? '3 · VOICEPRINT' : '2 · VOICEPRINT'; $('stepFace').parentElement.style.gridTemplateColumns = faceRequired ? 'repeat(3,1fr)' : 'repeat(2,1fr)';
-  $('passkeyState').textContent = session.passkey ? 'VERIFIED' : (enrolled.passkey ? 'LOCKED' : 'NOT ENROLLED');
-  $('faceState').textContent = faceRequired ? (session.face ? 'MATCHED' : (enrolled.face ? 'SCANNING' : 'NOT ENROLLED')) : 'DISABLED';
-  $('voiceAuthState').textContent = session.voice ? 'MATCHED' : (enrolled.voice ? 'ON COMMAND' : 'NOT ENROLLED');
-  $('authBadge').textContent = `IDENTITY · ${session.authorized ? 'AUTHORIZED' : session.passkey ? 'VOICE CHECK' : 'LOCKED'}`;
-  $('authBadge').classList.toggle('authorized', Boolean(session.authorized));
-  $('authPrimary').textContent = enrolled.passkey ? 'VERIFY WITH TOUCH ID' : 'INITIALIZE TOUCH ID';
-  $('authPrimary').classList.toggle('hidden', Boolean(session.passkey));
-  $('enrollFace').classList.toggle('hidden', !faceRequired || !session.passkey || enrolled.face);
-  $('enrollVoice').classList.toggle('hidden', !session.passkey || (faceRequired && !session.face) || enrolled.voice);
-  $('closeAuth').classList.toggle('hidden', !(enrolled.complete && session.passkey && (!faceRequired || session.face)));
-  $('faceVideo').classList.toggle('hidden', !faceRequired);
-  if (!enrolled.passkey) $('authMessage').textContent = 'Enroll a local Touch ID passkey to establish the owner identity.';
-  else if (!session.passkey) $('authMessage').textContent = 'Touch ID is required to unlock this JARVIS session.';
-  else if (faceRequired && !enrolled.face) $('authMessage').textContent = 'Touch ID verified. Capture five face samples in steady lighting.';
-  else if (faceRequired && !session.face) $('authMessage').textContent = 'Look into the camera while JARVIS verifies your face.';
-  else if (!enrolled.voice) $('authMessage').textContent = 'Touch ID verified. Record three voice samples saying “Jarvis, authorize Don.”';
-  else $('authMessage').textContent = 'Touch ID and voiceprint are enrolled. Voice is checked on every spoken command; face recognition is disabled.';
-  if (!session.passkey || (faceRequired && !session.face)) { stopWakeMode(); $('authModal').classList.remove('hidden'); }
+  const authorized = Boolean(status.session?.authorized);
+  $('accessState').textContent = authorized ? 'UNLOCKED' : 'LOCKED';
+  $('authBadge').textContent = `IDENTITY · ${authorized ? 'AUTHORIZED' : 'LOCKED'}`;
+  $('authBadge').classList.toggle('authorized', authorized);
+  if (!authorized) { stopWakeMode(); $('authModal').classList.remove('hidden'); $('authProgress').textContent = 'SESSION LOCKED'; }
+  else { $('authModal').classList.add('hidden'); $('authProgress').textContent = 'SESSION UNLOCKED'; }
 }
 
 async function refreshAuthStatus() {
@@ -56,102 +40,24 @@ async function refreshAuthStatus() {
   catch (e) { log(`Identity status error: ${e.message}`, 'error'); return null; }
 }
 
-async function performPasskey() {
-  if (!window.PublicKeyCredential || !navigator.credentials) return toast('Passkeys are unavailable in this browser');
-  const registering = !authGate.status.enrollment?.passkey;
-  $('authProgress').textContent = registering ? 'WAITING FOR TOUCH ID ENROLLMENT' : 'WAITING FOR TOUCH ID';
+async function login(secret) {
+  $('authProgress').textContent = 'VERIFYING ACCESS KEY';
   try {
-    const action = registering ? 'register' : 'login';
-    const bundle = await apiJson(`/api/auth/passkey/${action}/options`, {method:'POST'});
-    const options = decodeCredentialOptions(bundle.options);
-    const credential = registering ? await navigator.credentials.create({publicKey:options}) : await navigator.credentials.get({publicKey:options});
-    await apiJson(`/api/auth/passkey/${action}/verify`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction:bundle.transaction,credential:serializeCredential(credential)})});
-    $('authProgress').textContent = 'TOUCH ID VERIFIED'; log('Touch ID/passkey verified', 'amber');
-    const status = await refreshAuthStatus();
-    if (status?.policy?.face_required && status?.enrollment.face) await startContinuousFace();
-  } catch (e) { $('authProgress').textContent = 'TOUCH ID VERIFICATION FAILED'; log(`Touch ID error: ${e.message}`, 'error'); toast('Touch ID was not verified'); }
-}
-
-async function ensureCamera() {
-  if (identity.camera?.active) return identity.camera;
-  identity.camera = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});
-  $('faceVideo').srcObject = identity.camera; await $('faceVideo').play();
-  return identity.camera;
-}
-
-async function faceBlob() {
-  await ensureCamera();
-  const video = $('faceVideo'), canvas = $('faceCanvas');
-  if (!video.videoWidth) await new Promise(resolve => setTimeout(resolve, 400));
-  canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Camera frame unavailable')), 'image/jpeg', .9));
-}
-
-async function enrollFaceIdentity() {
-  $('authProgress').textContent = 'CAPTURING FACE MAP · HOLD STILL';
-  try {
-    const form = new FormData();
-    for (let index = 1; index <= 5; index += 1) {
-      $('authProgress').textContent = `CAPTURING FACE MAP · ${index}/5`;
-      form.append('images', await faceBlob(), `face-${index}.jpg`); await new Promise(resolve => setTimeout(resolve, 550));
-    }
-    await apiJson('/api/auth/face/enroll', {method:'POST',body:form}); log('Local face map enrolled · raw frames discarded', 'amber');
-    await verifyFaceIdentity(true); await refreshAuthStatus();
-  } catch (e) { $('authProgress').textContent = 'FACE ENROLLMENT FAILED'; log(`Face enrollment error: ${e.message}`, 'error'); toast('Face capture failed—use steady front lighting'); }
-}
-
-async function verifyFaceIdentity(showFailure = false) {
-  if (!authGate.status.policy?.face_required || identity.verifyingFace || !authGate.status.session?.passkey || !authGate.status.enrollment?.face) return false;
-  identity.verifyingFace = true;
-  try {
-    const form = new FormData(); form.append('image', await faceBlob(), 'face-check.jpg');
-    const result = await apiJson('/api/auth/face/verify', {method:'POST',body:form});
-    $('authProgress').textContent = `FACE VERIFIED · ${Math.round(result.score * 100)}%`; await refreshAuthStatus(); return true;
+    await apiJson('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({secret})});
+    $('authSecret').value = '';
+    log('Access key accepted', 'amber');
+    await refreshAuthStatus();
   } catch (e) {
-    pauseWakeMode(); await refreshAuthStatus();
-    if (showFailure) toast('Face not recognized');
-    log(`Face verification rejected: ${e.message}`, 'error'); return false;
-  } finally { identity.verifyingFace = false; }
-}
-
-async function startContinuousFace() {
-  if (!authGate.status.policy?.face_required) return;
-  await ensureCamera(); clearInterval(identity.faceTimer);
-  await verifyFaceIdentity(true);
-  identity.faceTimer = setInterval(() => verifyFaceIdentity(false), 5000);
-}
-
-async function captureVoiceWav(seconds = 3) {
-  const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-  const context = new AudioContext(); await context.resume();
-  const source = context.createMediaStreamSource(stream), processor = context.createScriptProcessor(4096,1,1), chunks = [];
-  source.connect(processor); processor.connect(context.destination);
-  processor.onaudioprocess = event => chunks.push(downsampleTo16k(event.inputBuffer.getChannelData(0), context.sampleRate));
-  await new Promise(resolve => setTimeout(resolve, seconds * 1000));
-  processor.disconnect(); source.disconnect(); stream.getTracks().forEach(track => track.stop()); await context.close();
-  const size = chunks.reduce((total, chunk) => total + chunk.length, 0), samples = new Float32Array(size); let offset = 0;
-  for (const chunk of chunks) { samples.set(chunk, offset); offset += chunk.length; }
-  return new Blob([encodeWav16(samples, 16000)], {type:'audio/wav'});
-}
-
-async function enrollVoiceIdentity() {
-  try {
-    const form = new FormData();
-    for (let index = 1; index <= 3; index += 1) {
-      $('authMessage').textContent = `Sample ${index}/3: say “Jarvis, authorize Don” clearly now.`;
-      $('authProgress').textContent = `RECORDING VOICEPRINT · ${index}/3`; playWakeChime();
-      form.append('samples', await captureVoiceWav(3), `voice-${index}.wav`); await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    await apiJson('/api/auth/voice/enroll', {method:'POST',body:form}); log('Local voiceprint enrolled · recordings discarded', 'amber');
-    $('authProgress').textContent = 'IDENTITY ENROLLMENT COMPLETE'; await refreshAuthStatus(); $('closeAuth').classList.remove('hidden');
-  } catch (e) { $('authProgress').textContent = 'VOICEPRINT ENROLLMENT FAILED'; log(`Voiceprint error: ${e.message}`, 'error'); toast('Voice enrollment failed'); }
+    $('authProgress').textContent = 'ACCESS DENIED';
+    log(`Login error: ${e.message}`, 'error');
+    toast('Incorrect access key');
+  }
 }
 
 async function lockIdentity() {
-  stopWakeMode(); clearInterval(identity.faceTimer); identity.camera?.getTracks().forEach(track => track.stop()); identity.camera = null; $('faceVideo').srcObject = null;
+  stopWakeMode();
   try { await apiJson('/api/auth/logout', {method:'POST'}); } catch (_) {}
-  $('authModal').classList.remove('hidden'); $('authProgress').textContent = 'SECURE SESSION LOCKED'; await refreshAuthStatus(); log('Identity session locked', 'error');
+  $('authModal').classList.remove('hidden'); $('authProgress').textContent = 'SESSION LOCKED'; await refreshAuthStatus(); log('Session locked', 'error');
 }
 
 function browserSpeak(text) {
@@ -212,7 +118,7 @@ function connectWakeSocket() {
 }
 
 async function startWakeMode() {
-  if (!authGate.canListen) { $('authModal').classList.remove('hidden'); return toast(authGate.status.policy?.face_required ? 'Touch ID and face verification required' : 'Touch ID verification required'); }
+  if (!authGate.canListen) { $('authModal').classList.remove('hidden'); return toast('Unlock JARVIS first'); }
   if (!state.wakeAvailable) return toast('Local wake-word engine unavailable');
   if (!navigator.mediaDevices?.getUserMedia || !window.WebSocket) return toast('Wake mode unsupported in this browser');
   try {
@@ -290,8 +196,7 @@ function armCommand(command) {
 
 async function submitDirective(rawText, inputMode = 'typed') {
   const text = String(rawText || '').trim(); if (!text && !state.armed) return;
-  const identityReady = inputMode === 'voice' ? authGate.canRun : authGate.canType;
-  if (!identityReady) { $('authModal').classList.remove('hidden'); toast(authGate.canListen ? 'Speak a command for voice verification' : 'Identity verification required'); return; }
+  if (!authGate.canRun) { $('authModal').classList.remove('hidden'); toast('Unlock JARVIS first'); return; }
   const directive = state.armed ? `${state.armed}${text ? ` ${text}` : ''}` : text;
   $('prompt').value = ''; state.armed = ''; $('armedCommand').textContent = 'NONE'; document.querySelectorAll('[data-command]').forEach(b => b.classList.remove('selected'));
   pauseWakeMode();
@@ -362,9 +267,8 @@ async function recordVoice(wakeTriggered = false) {
     recorder.onstop=async()=>{ cancelAnimationFrame(raf); processor.onaudioprocess=null;processor.disconnect();source.disconnect();stream.getTracks().forEach(t=>t.stop()); await ctx.close(); state.recorder=null; $('micButton').classList.remove('recording'); $('voiceState').textContent='VERIFYING'; setCore('VERIFYING VOICE');
       const blob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'}); log(`Voice captured · ${Math.round(performance.now()-started)} ms · ${Math.round(blob.size/1024)} KB`);
       if(!heardSpeech){$('voiceState').textContent='IDLE';setCore('STANDBY');log('No command speech detected after wake phrase','error');resumeWakeMode();return;}
-      const pcmSize=voiceChunks.reduce((total,chunk)=>total+chunk.length,0),pcm=new Float32Array(pcmSize);let pcmOffset=0;for(const chunk of voiceChunks){pcm.set(chunk,pcmOffset);pcmOffset+=chunk.length}const voiceBlob=new Blob([encodeWav16(pcm,16000)],{type:'audio/wav'});
       const form=new FormData(); form.append('audio',blob,recorder.mimeType.includes('mp4')?'recording.mp4':'recording.webm'); const sttStart=performance.now();
-      try{const verifyForm=new FormData();verifyForm.append('audio',voiceBlob,'voice-check.wav');const verified=await fetch('/api/auth/voice/verify',{method:'POST',body:verifyForm});if(!verified.ok)throw new Error(`Voice identity rejected: ${await verified.text()}`);const voiceResult=await verified.json();log(`Voice identity matched · ${Math.round(voiceResult.score*100)}%`,'amber');await refreshAuthStatus();$('voiceState').textContent='TRANSCRIBING';setCore('TRANSCRIBING');const r=await fetch('/api/stt',{method:'POST',body:form});if(!r.ok)throw new Error(await r.text());const out=await r.json();$('prompt').value=out.text;log(`STT ${out.provider} · ${out.latency_ms||Math.round(performance.now()-sttStart)} ms: ${out.text}`,'amber');$('voiceState').textContent='IDLE';await submitDirective(out.text,'voice')}catch(e){setCore('LOCKED');$('voiceState').textContent='REJECTED';log(`Authenticated voice pipeline stopped: ${e.message}`,'error');toast('Command ignored · voice not authorized');await refreshAuthStatus();resumeWakeMode()}
+      try{$('voiceState').textContent='TRANSCRIBING';setCore('TRANSCRIBING');const r=await fetch('/api/stt',{method:'POST',body:form});if(!r.ok)throw new Error(await r.text());const out=await r.json();$('prompt').value=out.text;log(`STT ${out.provider} · ${out.latency_ms||Math.round(performance.now()-sttStart)} ms: ${out.text}`,'amber');$('voiceState').textContent='IDLE';await submitDirective(out.text,'voice')}catch(e){setCore('LOCKED');$('voiceState').textContent='REJECTED';log(`Voice pipeline stopped: ${e.message}`,'error');toast('Command failed');await refreshAuthStatus();resumeWakeMode()}
     };
     recorder.start(100); $('micButton').classList.add('recording'); $('voiceState').textContent=wakeTriggered?'COMMAND':'LISTENING'; setCore(wakeTriggered?'SPEAK COMMAND':'LISTENING',true); log(wakeTriggered?'Wake accepted · listening for command':'Voice recording started'); monitor();
   } catch(e){log(`Microphone error: ${e.message}`,'error');toast('Microphone permission required');resumeWakeMode();}
@@ -374,7 +278,13 @@ function idleWave(){if(state.recorder)return;const data=new Uint8Array(160);cons
 
 $('promptForm').addEventListener('submit',e=>{e.preventDefault();submitDirective($('prompt').value)}); $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitDirective(e.target.value)}});
 $('micButton').onclick=()=>recordVoice(false); $('wakeButton').onclick=()=>wake.enabled?stopWakeMode():startWakeMode(); $('killVoice').onclick=()=>{voiceQueue.kill(state.runId);state.phrase='';log(`Voice killed for ${state.runId||'current run'}; text stream remains active`,'error');toast('VOICE OUTPUT TERMINATED')};
-$('authPrimary').onclick=performPasskey; $('enrollFace').onclick=enrollFaceIdentity; $('enrollVoice').onclick=enrollVoiceIdentity; $('authBadge').onclick=()=>$('authModal').classList.remove('hidden'); $('closeAuth').onclick=()=>{$('authModal').classList.add('hidden');if(authGate.status.policy?.face_required)startContinuousFace().catch(e=>log(`Camera error: ${e.message}`,'error'))}; $('lockAuth').onclick=lockIdentity;
-window.addEventListener('beforeunload',()=>{stopWakeMode();clearInterval(identity.faceTimer);identity.camera?.getTracks().forEach(track=>track.stop())});
+$('authForm').addEventListener('submit',e=>{e.preventDefault();const secret=$('authSecret').value.trim();if(secret)login(secret)}); $('authBadge').onclick=()=>$('authModal').classList.remove('hidden'); $('lockAuth').onclick=lockIdentity;
+window.addEventListener('beforeunload',()=>{stopWakeMode()});
 document.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>armCommand(b.dataset.command));
-setInterval(()=>$('clock').textContent=new Date().toLocaleTimeString('en-GB'),1000); refreshAuthStatus().then(status=>{if(status?.policy?.face_required&&status?.session.passkey&&status?.enrollment.face)startContinuousFace().catch(e=>log(`Camera error: ${e.message}`,'error'))});refreshStatus();setInterval(refreshStatus,30000);setInterval(refreshAuthStatus,10000);idleWave();log('JARVIS interface initialized');
+(function initLogToggle(){
+  const panel = document.querySelector('.log-panel'), btn = $('toggleLog');
+  const apply = hidden => { panel.classList.toggle('collapsed', hidden); btn.textContent = hidden ? 'SHOW' : 'HIDE'; };
+  apply(localStorage.jarvisLogHidden === '1');
+  btn.onclick = () => { const hidden = !panel.classList.contains('collapsed'); apply(hidden); localStorage.jarvisLogHidden = hidden ? '1' : '0'; };
+})();
+setInterval(()=>$('clock').textContent=new Date().toLocaleTimeString('en-GB'),1000); refreshAuthStatus();refreshStatus();setInterval(refreshStatus,30000);setInterval(refreshAuthStatus,10000);idleWave();log('JARVIS interface initialized');

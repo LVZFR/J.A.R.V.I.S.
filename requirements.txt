@@ -4,7 +4,3 @@ httpx>=0.28,<1
 python-multipart>=0.0.20,<1
 pydantic>=2.10,<3
 openwakeword==0.6.0
-webauthn==2.2.0
-cbor2==5.6.5
-cryptography>=44,<45
-opencv-contrib-python-headless==5.0.0.93

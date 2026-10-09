@@ -5,47 +5,6 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  function fromBase64url(value) {
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
-    const binary = typeof atob === 'function' ? atob(padded) : Buffer.from(padded, 'base64').toString('binary');
-    return Uint8Array.from(binary, char => char.charCodeAt(0)).buffer;
-  }
-
-  function toBase64url(buffer) {
-    const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
-    let binary = '';
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    const encoded = typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
-    return encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  }
-
-  function decodeCredentialOptions(options) {
-    const decoded = { ...options, challenge: fromBase64url(options.challenge) };
-    if (options.user?.id) decoded.user = { ...options.user, id: fromBase64url(options.user.id) };
-    for (const key of ['allowCredentials', 'excludeCredentials']) {
-      if (options[key]) decoded[key] = options[key].map(item => ({ ...item, id: fromBase64url(item.id) }));
-    }
-    return decoded;
-  }
-
-  function serializeCredential(credential) {
-    const response = credential.response;
-    const serialized = {
-      id: credential.id,
-      rawId: toBase64url(credential.rawId),
-      type: credential.type,
-      authenticatorAttachment: credential.authenticatorAttachment || undefined,
-      clientExtensionResults: credential.getClientExtensionResults?.() || {},
-      response: { clientDataJSON: toBase64url(response.clientDataJSON) },
-    };
-    for (const key of ['attestationObject', 'authenticatorData', 'signature', 'userHandle']) {
-      if (response[key]) serialized.response[key] = toBase64url(response[key]);
-    }
-    if (typeof response.getTransports === 'function') serialized.response.transports = response.getTransports();
-    return serialized;
-  }
-
   function encodeWav16(samples, sampleRate = 16000) {
     const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
@@ -60,14 +19,16 @@
     return buffer;
   }
 
+  // Simplified shared-secret auth gate (no WebAuthn/Touch ID, no biometrics).
+  // Kept the same shape the rest of app.js expects: canListen/canType/canRun.
   class AuthGate {
-    constructor() { this.status = { enrollment: {}, session: {} }; }
-    update(status) { this.status = status || { enrollment: {}, session: {} }; return this; }
-    get enrolled() { return Boolean(this.status.enrollment?.complete); }
-    get canListen() { return Boolean(this.status.session?.passkey && (!this.status.policy?.face_required || this.status.session?.face)); }
-    get canType() { return this.canListen; }
-    get canRun() { return Boolean(this.status.session?.authorized); }
+    constructor() { this.status = { session: {} }; }
+    update(status) { this.status = status || { session: {} }; return this; }
+    get authorized() { return Boolean(this.status.session?.authorized); }
+    get canListen() { return this.authorized; }
+    get canType() { return this.authorized; }
+    get canRun() { return this.authorized; }
   }
 
-  return { AuthGate, decodeCredentialOptions, encodeWav16, fromBase64url, serializeCredential, toBase64url };
+  return { AuthGate, encodeWav16 };
 });
